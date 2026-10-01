@@ -1,0 +1,13 @@
+{
+  "serverPort": 8080,
+  "apiPath": "/aaa/bbb",
+  "responseFilePath": "./resp.json",
+  "imagePath": "./image.jpeg",
+  "storage": {
+    "bucket": "img-bckt",
+    "region": "us-east-1",
+    "endpoint": "http://localhost:9000",
+    "username": "YOUR_LOGIN",
+    "password": "YOUR_PASSWORD"
+  }
+}
