@@ -1,5 +1,4 @@
 package com.example.stub;
-
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -14,9 +13,9 @@ import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.http.SdkHttpClient;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
-import javax.net.ssl.X509TrustManager;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -26,23 +25,19 @@ import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Collections;
-
 @Service
 public class StubService {
     private final ConfigLoader configLoader;
     private final S3Client s3Client;
     private final String baseDirectory;
-
     public StubService(ConfigLoader configLoader) {
         this.configLoader = configLoader;
         this.baseDirectory = determineBaseDirectory();
         this.s3Client = createS3Client();
         ensureBucketExists();
     }
-
     private String determineBaseDirectory() {
         String userDir = System.getProperty("user.dir");
         System.out.println("Working directory (user.dir): " + userDir);
@@ -53,34 +48,32 @@ public class StubService {
         }
         return userDir;
     }
-
     private S3Client createS3Client() {
         ConfigModel.StorageConfig storage = configLoader.getConfig().storage;
         AwsBasicCredentials credentials = AwsBasicCredentials.create(
                 storage.username,
-                storage.password);
+                storage.password
+        );
         SdkHttpClient httpClient = createSecureHttpClient(storage);
         return S3Client.builder()
                 .region(Region.of(storage.region))
                 .endpointOverride(URI.create(storage.endpoint))
                 .credentialsProvider(
-                        StaticCredentialsProvider.create(credentials))
+                        StaticCredentialsProvider.create(credentials)
+                )
                 .httpClient(httpClient)
                 .forcePathStyle(true)
                 .build();
     }
-
     private SdkHttpClient createSecureHttpClient(
-            ConfigModel.StorageConfig storage) {
+            ConfigModel.StorageConfig storage
+    ) {
         try {
             // Получаем файл сертификата
             File certFile = getCertificateFile(storage.certificatePath);
             System.out.println("Loading certificate from: " + certFile.getAbsolutePath());
             if (!certFile.exists()) {
                 throw new RuntimeException("Certificate file does not exist: " + certFile.getAbsolutePath());
-            }
-            if (!certFile.canRead()) {
-                throw new RuntimeException("Certificate file is not readable: " + certFile.getAbsolutePath());
             }
             // Создаем KeyStore с нашим сертификатом
             KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
@@ -91,25 +84,27 @@ public class StubService {
                 trustStore.setCertificateEntry("s3-cert", cert);
                 System.out.println("Certificate loaded successfully");
             }
-            // Создаем TrustManagerFactory и инициализируем с нашим trustStore
-            TrustManagerFactory tmf = TrustManagerFactory.getInstance(
-                    TrustManagerFactory.getDefaultAlgorithm());
-            tmf.init(trustStore);
-            // Создаем SSLContext с нашими TrustManagers
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
-            // Создаем Apache HTTP Client с правильной конфигурацией TLS
-            // Используем tlsTrustManagersProvider который передает наши TrustManagers
-            return ApacheHttpClient.builder()
-                    .tlsTrustManagersProvider(() -> tmf.getTrustManagers())
-                    .build();
+            // Создаем временный файл truststore
+            File tempTrustStore = File.createTempFile("truststore", ".jks");
+            tempTrustStore.deleteOnExit();
+            // Сохраняем truststore во временный файл
+try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
+                trustStore.store(fos, "changeit".toCharArray());
+            }
+            System.out.println("TrustStore created at: " + tempTrustStore.getAbsolutePath());
+            // Устанавливаем системные свойства для JVM
+            System.setProperty("javax.net.ssl.trustStore", tempTrustStore.getAbsolutePath());
+            System.setProperty("javax.net.ssl.trustStorePassword", "changeit");
+            System.out.println("System properties set for SSL");
+            // Создаем стандартный HTTP клиент, который будет использовать системные свойства
+            return ApacheHttpClient.builder().build();
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to create secure HTTP client: " + e.getMessage(),
-                    e);
+                    e
+            );
         }
     }
-
     private File getCertificateFile(String certPath) {
         File certFile = new File(certPath);
         if (certFile.isAbsolute() && certFile.exists()) {
@@ -130,7 +125,7 @@ public class StubService {
                     certFile.deleteOnExit();
                     Files.copy(is, certFile.toPath(),
                             java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println("Loaded from classpath to: " +
+                    System.out.println("Loaded from classpath to: " + 
                             certFile.getAbsolutePath());
                 }
             } catch (IOException e) {
@@ -139,17 +134,18 @@ public class StubService {
         }
         if (!certFile.exists()) {
             throw new RuntimeException(
-                    "Certificate file not found. Looked at: " +
-                            certFile.getAbsolutePath());
+                    "Certificate file not found. Looked at: " + 
+                    certFile.getAbsolutePath()
+            );
         }
         return certFile;
     }
-
     private void ensureBucketExists() {
         String bucket = configLoader.getConfig().storage.bucket;
         try {
             s3Client.headBucket(
-                    HeadBucketRequest.builder().bucket(bucket).build());
+                    HeadBucketRequest.builder().bucket(bucket).build()
+            );
             System.out.println("Bucket exists: " + bucket);
         } catch (S3Exception e) {
             if (e.statusCode() == 404) {
@@ -163,7 +159,6 @@ public class StubService {
             }
         }
     }
-
     public String getStubResponse() {
         String path = configLoader.getConfig().responseFilePath;
         File responseFile = new File(path);
@@ -176,11 +171,11 @@ public class StubService {
             return new String(bytes);
         } catch (IOException e) {
             System.err.println(
-                    "Error reading response file: " + e.getMessage());
+                    "Error reading response file: " + e.getMessage()
+            );
             return "{\"error\": \"Response file not found\"}";
         }
     }
-
     public void uploadImage() {
         ConfigModel cfg = configLoader.getConfig();
         String imagePath = cfg.imagePath;
@@ -188,14 +183,17 @@ public class StubService {
         System.out.println("Uploading to bucket: " + bucket);
         File file = new File(imagePath);
         System.out.println(
-                "Searching image at: " + file.getAbsolutePath());
+                "Searching image at: " + file.getAbsolutePath()
+        );
         if (!file.exists()) {
             throw new IllegalStateException(
-                    "Image file not found: " + file.getAbsolutePath());
+                    "Image file not found: " + file.getAbsolutePath()
+            );
         }
         if (!file.canRead()) {
             throw new IllegalStateException(
-                    "Image file is not readable: " + file.getAbsolutePath());
+                    "Image file is not readable: " + file.getAbsolutePath()
+            );
         }
         String objectKey = file.getName();
         String contentType = determineContentType(file.getName());
@@ -209,8 +207,7 @@ public class StubService {
                 .contentLength(file.length()).build();
         PutObjectResponse response = s3Client.putObject(putRequest, file.toPath());
         List<String> etagList = response.sdkHttpResponse()
-                .headers()
-                .getOrDefault("etag", Collections.emptyList());
+                .headers().getOrDefault("etag", Collections.emptyList());
         String etag = etagList.isEmpty() ? "N/A" : etagList.get(0);
         List<String> versionList = response.sdkHttpResponse()
                 .headers()
@@ -220,12 +217,11 @@ public class StubService {
         System.out.println("Object Key: " + objectKey);
         System.out.println("ETag: " + etag);
         System.out.println("VersionId: " + versionId);
-        System.out.println("Status Code: " +
+        System.out.println("Status Code: " + 
                 response.sdkHttpResponse().statusCode());
         System.out.println("=============================");
         System.out.println("Upload successful!");
     }
-
     private String determineContentType(String fileName) {
         if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
             return "image/jpeg";
@@ -244,3 +240,4 @@ public class StubService {
         }
     }
 }
+
