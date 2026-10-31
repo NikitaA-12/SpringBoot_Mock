@@ -14,8 +14,15 @@ public class ImageController {
     }
     @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> handleStubRequest() {
-        stubService.uploadImage();
-        return ResponseEntity.ok(stubService.getStubResponse());
+        try {
+            stubService.uploadImage();
+            // Всегда возвращаем заглушку, даже если загрузка не удалась
+            return ResponseEntity.ok(stubService.getStubResponse());
+        } catch (Exception e) {
+            // Логируем ошибку, но возвращаем заглушку
+            System.err.println("Error in controller: " + e.getMessage());
+            return ResponseEntity.ok(stubService.getStubResponse());
+        }
     }
     @GetMapping("/health")
     public ResponseEntity<String> healthCheck() {
