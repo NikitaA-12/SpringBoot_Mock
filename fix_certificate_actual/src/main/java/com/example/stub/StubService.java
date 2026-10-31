@@ -18,7 +18,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.KeyStore;
@@ -31,10 +30,36 @@ import java.util.Collections;
 public class StubService {
     private final ConfigLoader configLoader;
     private final S3Client s3Client;
+    private final String baseDirectory;
     public StubService(ConfigLoader configLoader) {
         this.configLoader = configLoader;
+        this.baseDirectory = determineBaseDirectory();
         this.s3Client = createS3Client();
         ensureBucketExists();
+    }
+    private String determineBaseDirectory() {
+        // Используем системное свойство user.dir как основную директорию
+        String userDir = System.getProperty("user.dir");
+        System.out.println("Working directory (user.dir): " + userDir);
+        // Проверяем наличие config.json в текущей директории
+        File configFile = new File(userDir, "config.json");
+        if (configFile.exists()) {
+            System.out.println("Found config.json in: " + userDir);
+            return userDir;
+        }
+        // Пробуем найти config.json в родительских директориях
+        File currentDir = new File(userDir);
+        for (int i = 0; i < 5; i++) {
+            currentDir = currentDir.getParentFile();
+            if (currentDir == null) break;
+            configFile = new File(currentDir, "config.json");
+            if (configFile.exists()) {
+                System.out.println("Found config.json in: " + currentDir.getAbsolutePath());
+                return currentDir.getAbsolutePath();
+            }
+        }
+        System.out.println("Using working directory as base: " + userDir);
+        return userDir;
     }
     private S3Client createS3Client() {
         ConfigModel.StorageConfig storage = configLoader.getConfig().storage;
@@ -99,13 +124,10 @@ public class StubService {
         if (certFile.isAbsolute() && certFile.exists()) {
             return certFile;
         }
-        // Определяем базовую директорию приложения
-        String baseDir = getApplicationDirectory();
-        System.out.println("Application directory: " + baseDir);
         // Очищаем путь от "./" в начале
         String cleanedPath = certPath.replaceFirst("^\\./", "");
-        // Пробуем загрузить относительно директории приложения
-        certFile = new File(baseDir, cleanedPath);
+        // Пробуем загрузить относительно базовой директории
+        certFile = new File(baseDirectory, cleanedPath);
         System.out.println("Trying path: " + certFile.getAbsolutePath());
         if (!certFile.exists()) {
             // Пробуем загрузить относительно текущей рабочей директории
@@ -137,28 +159,6 @@ public class StubService {
         }
         return certFile;
     }
-    private String getApplicationDirectory() {
-        try {
-            // Получаем путь к JAR файлу
-            java.net.URL location = StubService.class
-                    .getProtectionDomain()
-                    .getCodeSource()
-                    .getLocation();
-            if (location != null) {
-                File jarFile = new File(location.toURI());
-                String jarDir = jarFile.getParent();
-                System.out.println("JAR location: " + jarFile.getAbsolutePath());
-                System.out.println("JAR directory: " + jarDir);
-                return jarDir;
-            }
-        } catch (URISyntaxException e) {
-            System.err.println("Warning: Could not resolve JAR path");
-        }
-        // Если не удалось получить путь из JAR, используем текущую директорию
-        String userDir = System.getProperty("user.dir");
-        System.out.println("Using user.dir: " + userDir);
-        return userDir;
-    }
     private void ensureBucketExists() {
         String bucket = configLoader.getConfig().storage.bucket;
         try {
@@ -179,13 +179,12 @@ public class StubService {
         }
     }
     public String getStubResponse() {
-        String path = configLoader.getConfig().responseFilePath;
+String path = configLoader.getConfig().responseFilePath;
         File responseFile = new File(path);
-// Если файл не найден по прямому пути, ищем в директории приложения
+        // Если файл не найден по прямому пути, ищем в базовой директории
         if (!responseFile.exists()) {
-            String baseDir = getApplicationDirectory();
             String cleanedPath = path.replaceFirst("^\\./", "");
-            responseFile = new File(baseDir, cleanedPath);
+            responseFile = new File(baseDirectory, cleanedPath);
         }
         try {
             byte[] bytes = Files.readAllBytes(responseFile.toPath());
