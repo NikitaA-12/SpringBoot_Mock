@@ -5,8 +5,6 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
-import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.http.SdkHttpClient;
@@ -89,11 +87,10 @@ public class StubService {
             return;
         }
         try {
-            // Проверяем существование бакета ensureBucketExists();
             String objectKey = file.getName();
             String contentType = determineContentType(file.getName());
             System.out.println("Uploading to bucket: " + bucket);
-            System.out.println("Object key: " + objectKey);
+System.out.println("Object key: " + objectKey);
             System.out.println("Content-Type: " + contentType);
             System.out.println("File size: " + file.length() + " bytes");
             PutObjectRequest putRequest = PutObjectRequest.builder()
@@ -114,25 +111,6 @@ public class StubService {
         }
         System.out.println("=== Upload attempt complete ===");
     }
-    private void ensureBucketExists() {
-        if (!s3Enabled || s3Client == null) {
-            return;
-        }
-        String bucket = configLoader.getConfig().storage.bucket;
-        try {
-            s3Client.headBucket(
-                    HeadBucketRequest.builder().bucket(bucket).build()
-            );
-            System.out.println("Bucket exists: " + bucket);
-        } catch (S3Exception e) {
-            // Бакет не существует или ошибка - просто логируем и продолжаем
-            System.err.println("Warning: Could not check bucket: " + e.getMessage());
-            System.err.println("Will try to upload anyway");
-        } catch (Exception e) {
-            System.err.println("Warning: Unexpected error checking bucket: " + e.getMessage());
-            System.err.println("Will try to upload anyway");
-        }
-    }
     private String determineContentType(String fileName) {
         if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
             return "image/jpeg";
@@ -151,4 +129,3 @@ public class StubService {
         }
     }
 }
-
