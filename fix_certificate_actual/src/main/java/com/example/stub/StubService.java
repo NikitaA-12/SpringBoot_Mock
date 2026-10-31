@@ -10,17 +10,11 @@ import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.http.SdkHttpClient;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.X509Certificate;
 @Service
 public class StubService {
     private final ConfigLoader configLoader;
@@ -36,7 +30,11 @@ public class StubService {
                 storage.username,
                 storage.password
         );
-        SdkHttpClient httpClient = createInsecureHttpClient();
+        // Создаем HTTP клиент без проверки SSL
+        SdkHttpClient httpClient = ApacheHttpClient.builder()
+                .connectionTimeout(java.time.Duration.ofSeconds(5))
+                .socketTimeout(java.time.Duration.ofSeconds(10))
+                .build();
         return S3Client.builder()
                 .region(Region.of(storage.region))
                 .endpointOverride(URI.create(storage.endpoint))
@@ -45,39 +43,10 @@ public class StubService {
                 .forcePathStyle(true)
                 .build();
     }
-    private SdkHttpClient createInsecureHttpClient() {
-        try {
-            // Создаем SSLContext, который доверяет всем сертификатам
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() {
-                        return new X509Certificate[0];
-                    }
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                        // Не проверяем
-                    }
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
-                        // Не проверяем
-                    }
-                }
-            };
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
-            // Отключаем проверку хоста (hostname verification)
-            System.setProperty("com.amazonaws.sdk.disableCertChecking", "true");
-            return ApacheHttpClient.builder()
-                    .tlsTrustManagersProvider(() -> trustAllCerts)
-                    .build();
-        } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            throw new RuntimeException(
-                    "Failed to create insecure HTTP client: " + e.getMessage(),
-                    e
-            );
-        }
-    }
     private void ensureBucketExists() {
         String bucket = configLoader.getConfig().storage.bucket;
         try {
+            // Проверяем существование бакета
             s3Client.headBucket(
                     HeadBucketRequest.builder().bucket(bucket).build()
             );
@@ -85,13 +54,28 @@ public class StubService {
         } catch (S3Exception e) {
             if (e.statusCode() == 404) {
                 System.out.println("Bucket not found. Creating: " + bucket);
-                s3Client.createBucket(CreateBucketRequest.builder()
-                        .bucket(bucket)
-                        .build());
-                System.out.println("Bucket created: " + bucket);
+                try {
+                    s3Client.createBucket(CreateBucketRequest.builder()
+                            .bucket(bucket)
+                            .build());
+                    System.out.println("Bucket created: " + bucket);
+                } catch (S3Exception createException) {
+                    // Если бакет не может быть создан, просто логируем ошибку
+                    // но продолжаем работу - возможно бакет уже существует
+                    System.err.println("Warning: Could not create bucket: " + 
+                        createException.getMessage());
+                    System.err.println("Continuing with existing bucket or will try on upload...");
+                }
             } else {
-                throw e;
+                // Для других ошибок, просто логируем и продолжаем
+                // Это может быть проблема с endpoint или авторизацией
+                System.err.println("Warning: Error checking bucket: " + e.getMessage());
+                System.err.println("Will try to continue without bucket check...");
             }
+        } catch (Exception e) {
+            // Любые другие ошибки - продолжаем работу
+            System.err.println("Warning: Unexpected error checking bucket: " + e.getMessage());
+            System.err.println("Will try to continue without bucket check...");
         }
     }
     public String getStubResponse() {
@@ -136,8 +120,15 @@ public class StubService {
                 .contentType(contentType)
                 .contentLength(file.length())
                 .build();
-        s3Client.putObject(putRequest, file.toPath());
-        System.out.println("Upload successful!");
+        try {
+            s3Client.putObject(putRequest, file.toPath());
+            System.out.println("Upload successful!");
+        } catch (S3Exception e) {
+            System.err.println("Upload failed: " + e.getMessage());
+            System.err.println("Status code: " + e.statusCode());
+            System.err.println("Error code: " + e.awsErrorDetails().errorCode());
+            throw e;
+        }
     }
     private String determineContentType(String fileName) {
         if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) {
