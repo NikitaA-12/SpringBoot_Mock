@@ -1,0 +1,6 @@
+com\example\stub\ConfigModel.class
+com\example\stub\StubService.class
+com\example\stub\StubApplication.class
+com\example\stub\ConfigModel$StorageConfig.class
+com\example\stub\ConfigLoader.class
+com\example\stub\ImageController.class
