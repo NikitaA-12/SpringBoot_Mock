@@ -5,48 +5,30 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.http.SdkHttpClient;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.Certificate;
-import java.security.cert.CertificateFactory;
-import java.util.List;
-import java.util.Collections;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.X509Certificate;
 @Service
 public class StubService {
     private final ConfigLoader configLoader;
     private final S3Client s3Client;
-    private final String baseDirectory;
     public StubService(ConfigLoader configLoader) {
         this.configLoader = configLoader;
-        this.baseDirectory = determineBaseDirectory();
         this.s3Client = createS3Client();
         ensureBucketExists();
-    }
-    private String determineBaseDirectory() {
-        String userDir = System.getProperty("user.dir");
-        System.out.println("Working directory (user.dir): " + userDir);
-        File configFile = new File(userDir, "config.json");
-        if (configFile.exists()) {
-            System.out.println("Found config.json in: " + userDir);
-            return userDir;
-        }
-        return userDir;
     }
     private S3Client createS3Client() {
         ConfigModel.StorageConfig storage = configLoader.getConfig().storage;
@@ -54,91 +36,44 @@ public class StubService {
                 storage.username,
                 storage.password
         );
-        SdkHttpClient httpClient = createSecureHttpClient(storage);
+        SdkHttpClient httpClient = createInsecureHttpClient();
         return S3Client.builder()
                 .region(Region.of(storage.region))
                 .endpointOverride(URI.create(storage.endpoint))
-                .credentialsProvider(
-                        StaticCredentialsProvider.create(credentials)
-                )
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
                 .httpClient(httpClient)
                 .forcePathStyle(true)
                 .build();
     }
-    private SdkHttpClient createSecureHttpClient(
-            ConfigModel.StorageConfig storage
-    ) {
+    private SdkHttpClient createInsecureHttpClient() {
         try {
-            // Получаем файл сертификата
-            File certFile = getCertificateFile(storage.certificatePath);
-            System.out.println("Loading certificate from: " + certFile.getAbsolutePath());
-            if (!certFile.exists()) {
-                throw new RuntimeException("Certificate file does not exist: " + certFile.getAbsolutePath());
-            }
-            // Создаем KeyStore с нашим сертификатом
-            KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            trustStore.load(null, null);
-            try (InputStream certStream = new FileInputStream(certFile)) {
-                CertificateFactory cf = CertificateFactory.getInstance("X.509");
-                Certificate cert = cf.generateCertificate(certStream);
-                trustStore.setCertificateEntry("s3-cert", cert);
-                System.out.println("Certificate loaded successfully");
-            }
-            // Создаем временный файл truststore
-            File tempTrustStore = File.createTempFile("truststore", ".jks");
-            tempTrustStore.deleteOnExit();
-            // Сохраняем truststore во временный файл
-try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
-                trustStore.store(fos, "changeit".toCharArray());
-            }
-            System.out.println("TrustStore created at: " + tempTrustStore.getAbsolutePath());
-            // Устанавливаем системные свойства для JVM
-            System.setProperty("javax.net.ssl.trustStore", tempTrustStore.getAbsolutePath());
-            System.setProperty("javax.net.ssl.trustStorePassword", "changeit");
-            System.out.println("System properties set for SSL");
-            // Создаем стандартный HTTP клиент, который будет использовать системные свойства
-            return ApacheHttpClient.builder().build();
-        } catch (Exception e) {
+            // Создаем SSLContext, который доверяет всем сертификатам
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() {
+                        return new X509Certificate[0];
+                    }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                        // Не проверяем
+                    }
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                        // Не проверяем
+                    }
+                }
+            };
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+            // Отключаем проверку хоста (hostname verification)
+            System.setProperty("com.amazonaws.sdk.disableCertChecking", "true");
+            return ApacheHttpClient.builder()
+                    .tlsTrustManagersProvider(() -> trustAllCerts)
+                    .build();
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new RuntimeException(
-                    "Failed to create secure HTTP client: " + e.getMessage(),
+                    "Failed to create insecure HTTP client: " + e.getMessage(),
                     e
             );
         }
-    }
-    private File getCertificateFile(String certPath) {
-        File certFile = new File(certPath);
-        if (certFile.isAbsolute() && certFile.exists()) {
-            return certFile;
-        }
-        String cleanedPath = certPath.replaceFirst("^\\./", "");
-        certFile = new File(baseDirectory, cleanedPath);
-        System.out.println("Trying path: " + certFile.getAbsolutePath());
-        if (!certFile.exists()) {
-            certFile = new File(System.getProperty("user.dir"), cleanedPath);
-            System.out.println("Trying path: " + certFile.getAbsolutePath());
-        }
-        if (!certFile.exists()) {
-            try (InputStream is = getClass().getClassLoader()
-                    .getResourceAsStream(cleanedPath)) {
-                if (is != null) {
-                    certFile = File.createTempFile("cert", ".crt");
-                    certFile.deleteOnExit();
-                    Files.copy(is, certFile.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println("Loaded from classpath to: " + 
-                            certFile.getAbsolutePath());
-                }
-            } catch (IOException e) {
-                System.err.println("Warning: Could not load certificate from classpath");
-            }
-        }
-        if (!certFile.exists()) {
-            throw new RuntimeException(
-                    "Certificate file not found. Looked at: " + 
-                    certFile.getAbsolutePath()
-            );
-        }
-        return certFile;
     }
     private void ensureBucketExists() {
         String bucket = configLoader.getConfig().storage.bucket;
@@ -161,13 +96,8 @@ try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
     }
     public String getStubResponse() {
         String path = configLoader.getConfig().responseFilePath;
-        File responseFile = new File(path);
-        if (!responseFile.exists()) {
-            String cleanedPath = path.replaceFirst("^\\./", "");
-            responseFile = new File(baseDirectory, cleanedPath);
-        }
         try {
-            byte[] bytes = Files.readAllBytes(responseFile.toPath());
+            byte[] bytes = Files.readAllBytes(Paths.get(path));
             return new String(bytes);
         } catch (IOException e) {
             System.err.println(
@@ -180,7 +110,6 @@ try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
         ConfigModel cfg = configLoader.getConfig();
         String imagePath = cfg.imagePath;
         String bucket = cfg.storage.bucket;
-        System.out.println("Uploading to bucket: " + bucket);
         File file = new File(imagePath);
         System.out.println(
                 "Searching image at: " + file.getAbsolutePath()
@@ -197,6 +126,7 @@ try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
         }
         String objectKey = file.getName();
         String contentType = determineContentType(file.getName());
+        System.out.println("Uploading to bucket: " + bucket);
         System.out.println("Object key: " + objectKey);
         System.out.println("Content-Type: " + contentType);
         System.out.println("File size: " + file.length() + " bytes");
@@ -204,22 +134,9 @@ try (FileOutputStream fos = new FileOutputStream(tempTrustStore)) {
                 .bucket(bucket)
                 .key(objectKey)
                 .contentType(contentType)
-                .contentLength(file.length()).build();
-        PutObjectResponse response = s3Client.putObject(putRequest, file.toPath());
-        List<String> etagList = response.sdkHttpResponse()
-                .headers().getOrDefault("etag", Collections.emptyList());
-        String etag = etagList.isEmpty() ? "N/A" : etagList.get(0);
-        List<String> versionList = response.sdkHttpResponse()
-                .headers()
-                .getOrDefault("x-amz-version-id", Collections.emptyList());
-        String versionId = versionList.isEmpty() ? "N/A" : versionList.get(0);
-        System.out.println("=== S3 Upload Response ===");
-        System.out.println("Object Key: " + objectKey);
-        System.out.println("ETag: " + etag);
-        System.out.println("VersionId: " + versionId);
-        System.out.println("Status Code: " + 
-                response.sdkHttpResponse().statusCode());
-        System.out.println("=============================");
+                .contentLength(file.length())
+                .build();
+        s3Client.putObject(putRequest, file.toPath());
         System.out.println("Upload successful!");
     }
     private String determineContentType(String fileName) {
